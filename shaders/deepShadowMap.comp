@@ -1,0 +1,153 @@
+#version 430
+#define lowp
+#define mediump
+#define highp
+#line 1
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(rg16f, binding = 2) uniform image2DArray img_output;
+uniform sampler3D smokeData;
+uniform vec3 lightPos;
+uniform vec3 smokeDims;
+uniform float shadowFarFrust;
+uniform float smokeFarPlane;
+uniform float smokeNearPlane;
+
+uniform mat4 inverseLightViewMatrix;
+uniform mat4 lightViewMatrix;
+uniform mat4 lightProjectionMatrix;
+uniform mat4 inverseLightViewProjectionMatrix;
+
+const int numSlices = 512;
+const int concurrentSlices = 16;
+const float attenuationFactor = (1.0 / float(numSlices)) * 80.0;
+float depthValues[concurrentSlices];
+//float densities[concurrentSlices];
+float transmittance[concurrentSlices];
+float areas[concurrentSlices];
+
+vec3 toSmokePos(vec3 pos)
+{
+	vec3 result = pos.xyz * 100;
+	result = result + (smokeDims * 0.5);
+	result = result / smokeDims;
+	return result;
+}
+
+void main()
+{
+	//Compute Light View Space coordinates
+	ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
+	uvec2 size = gl_NumWorkGroups.xy * gl_WorkGroupSize.xy;
+	vec2 lightProjectionSpaceCoords = 2.0 * vec2(pixel_coords) / vec2(size) - 1.0;
+
+	float d = smokeFarPlane - smokeNearPlane;
+	float stepSize = d / float(numSlices);
+
+	float aggregate = 1.0;
+
+	//Fill Up the array first
+	for (int i = 0; i < concurrentSlices; i++){
+		float zCoord = -smokeNearPlane - (i * stepSize);
+		float zCoordProjSpace = (lightProjectionMatrix * vec4(0.0, 0.0, zCoord, 1.0)).z; // In Projection space
+		vec4 worldPos = inverseLightViewProjectionMatrix * vec4(lightProjectionSpaceCoords.xy, zCoordProjSpace, 1.0);
+		vec3 smokePos = toSmokePos(worldPos.xyz);
+		float density = texture(smokeData, smokePos).r;
+		//TEST
+		density = min(density, 1.0);
+		aggregate = aggregate * (1 - density * attenuationFactor);
+		aggregate = max(0.0, aggregate);
+
+		depthValues[i] = zCoordProjSpace;
+		transmittance[i] = aggregate;
+	}
+
+	//Then, before adding each new Data Point, eliminate an old one
+	//But never delete the first or last two Nodes
+	for (int i = concurrentSlices; i < numSlices; i++){
+
+		//Calculate the Area lost by removing each point
+		areas[0] = 1000.0;
+		areas[concurrentSlices-1] = 1000.0;
+		areas[concurrentSlices-2] = 1000.0;
+		for (int j = 1; j < concurrentSlices-2; j++){
+			float a = length(	vec2(   depthValues[j],   transmittance[j]) - vec2( depthValues[j+1], transmittance[j+1]));
+			float b = length(	vec2( depthValues[j+1], transmittance[j+1]) - vec2( depthValues[j-1], transmittance[j-1]));
+			float c = length(	vec2( depthValues[j-1], transmittance[j-1]) - vec2(   depthValues[j],   transmittance[j]));
+			float s = (a + b + c) * 0.5;
+			float area = sqrt( s * (s - a) * (s - b) * (s - c));
+			areas[j] = area;
+		}
+		
+
+		//Find Point with smallest Area loss
+		float smallestArea = 900;
+		int smallestIndex = 0;
+		for(int j = 1; j < concurrentSlices - 1; j++){
+			if (areas[j] < smallestArea){
+				smallestArea = areas[j];
+				smallestIndex = j;
+			}
+		}
+		//And remove it
+		for (int j = 1; j < concurrentSlices - 1; j++){
+			if (j >= smallestIndex){
+				depthValues[j] = depthValues[j+1];
+				transmittance[j] = transmittance[j+1];
+			}
+		}
+
+		//Add new Data Point
+		float zCoord = -smokeNearPlane - (i * stepSize);
+		float zCoordProjSpace = (lightProjectionMatrix * vec4(0.0, 0.0, zCoord, 1.0)).z; // In Projection space
+		vec4 worldPos = inverseLightViewProjectionMatrix * vec4(lightProjectionSpaceCoords.xy, zCoordProjSpace, 1.0);
+		vec3 smokePos = toSmokePos(worldPos.xyz);
+		float density = texture(smokeData, smokePos).r;
+		//TEST to limit density to max 1
+		density = min(density, 1.0);
+		aggregate = aggregate * (1 - density * attenuationFactor);
+		aggregate = max(0.0, aggregate);
+
+		depthValues[concurrentSlices-1] = zCoordProjSpace;
+		transmittance[concurrentSlices-1] = aggregate;
+	}
+
+	//After all Slices are done, cut down to 8 Data Points
+	for (int i = concurrentSlices; i > 8; i--){
+		
+		//Calculate the Area lost by removing each point
+		areas[0] = 1000.0;
+		for (int j = 1; j < concurrentSlices-1; j++){
+			if (j < i-2){
+				float a = length(	vec2(   depthValues[j],   transmittance[j]) - vec2( depthValues[j+1], transmittance[j+1]));
+				float b = length(	vec2( depthValues[j+1], transmittance[j+1]) - vec2( depthValues[j-1], transmittance[j-1]));
+				float c = length(	vec2( depthValues[j-1], transmittance[j-1]) - vec2(   depthValues[j],   transmittance[j]));
+				float s = (a + b + c) * 0.5;
+				float area = sqrt( s * (s - a) * (s - b) * (s - c));
+				areas[j] = area;
+			} else{
+				areas[j] = 1000.0;
+			}			
+		}
+
+		//Find Point with smallest Area loss
+		float smallestArea = 900;
+		int smallestIndex = 0;
+		for(int j = 1; j < concurrentSlices-1; j++){
+			if (areas[j] < smallestArea){
+				smallestArea = areas[j];
+				smallestIndex = j;
+			}
+		}
+		//And remove it
+		for (int j = 1; j < concurrentSlices - 1; j++){
+			if (j >= smallestIndex){
+				depthValues[j] = depthValues[j+1];
+				transmittance[j] = transmittance[j+1];
+			}
+		}
+	}
+
+	for (int i = 0; i < 8; i++){
+		imageStore(img_output, ivec3(pixel_coords, i), vec4(depthValues[i], transmittance[i], 0.0, 0.0));
+	}
+}

@@ -1,0 +1,19 @@
+<RCC>
+    <qresource prefix="/">
+        <file>shaders/phong_textured.frag</file>
+        <file>shaders/phong_textured.vert</file>
+        <file>shaders/phong_color.frag</file>
+        <file>shaders/phong_color.vert</file>
+        <file>shaders/depth.frag</file>
+        <file>shaders/depth.vert</file>
+        <file>shaders/debug.frag</file>
+        <file>shaders/debug.vert</file>
+		    <file>shaders/smokeParticle.frag</file>
+        <file>shaders/smokeParticle.vert</file>
+        <file>shaders/smokeSlice.frag</file>
+        <file>shaders/smokeSlice.vert</file>
+        <file>shaders/shadowVolume.comp</file>
+        <file>shaders/deepShadowMap.comp</file>
+        <file>shaders/particleCreation.comp</file>
+    </qresource>
+</RCC>

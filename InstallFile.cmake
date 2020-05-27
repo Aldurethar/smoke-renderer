@@ -1,0 +1,1 @@
+file(INSTALL ${SRC} DESTINATION ${DST})

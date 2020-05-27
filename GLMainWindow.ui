@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>GLMainWindow</class>
+ <widget class="QMainWindow" name="GLMainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>600</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>GLMainWindow</string>
+  </property>
+  <property name="windowIcon">
+   <iconset resource="icon.qrc">
+    <normaloff>:/fhg.ico</normaloff>:/fhg.ico</iconset>
+  </property>
+  <widget class="OpenGLWidget" name="openGLWidget">
+   <property name="minimumSize">
+    <size>
+     <width>128</width>
+     <height>128</height>
+    </size>
+   </property>
+  </widget>
+  <widget class="QMenuBar" name="menuBar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>800</width>
+     <height>21</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>&amp;File</string>
+    </property>
+    <addaction name="actionExit"/>
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>&amp;Help</string>
+    </property>
+    <addaction name="actionAbout"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>&amp;View</string>
+    </property>
+    <addaction name="actionFullScreen"/>
+    <addaction name="actionFullScreenOpenGL"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuView"/>
+   <addaction name="menuHelp"/>
+  </widget>
+  <widget class="QStatusBar" name="statusBar"/>
+  <action name="actionExit">
+   <property name="text">
+    <string>E&amp;xit</string>
+   </property>
+  </action>
+  <action name="actionAbout">
+   <property name="text">
+    <string>&amp;About</string>
+   </property>
+  </action>
+  <action name="actionFullScreen">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Full Screen</string>
+   </property>
+  </action>
+  <action name="actionFullScreenOpenGL">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Full Screen Open&amp;GL</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+Return</string>
+   </property>
+  </action>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>OpenGLWidget</class>
+   <extends>QWidget</extends>
+   <header>OpenGLWidget.hpp</header>
+   <container>1</container>
+   <slots>
+    <signal>loggingSynchronousChanged(bool)</signal>
+    <signal>loggingEnabledChanged(bool)</signal>
+    <slot>setLoggingSynchronous(bool)</slot>
+    <slot>setLoggingEnabled(bool)</slot>
+   </slots>
+  </customwidget>
+ </customwidgets>
+ <resources>
+  <include location="icon.qrc"/>
+ </resources>
+ <connections>
+  <connection>
+   <sender>actionExit</sender>
+   <signal>triggered()</signal>
+   <receiver>GLMainWindow</receiver>
+   <slot>close()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>-1</x>
+     <y>-1</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>399</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+ <slots>
+  <signal>openGLLoggingEnabledChanged(bool)</signal>
+  <signal>openGLLoggingSynchronousChanged(bool)</signal>
+  <slot>setOpenGLLoggingEnabled(bool)</slot>
+ </slots>
+</ui>
