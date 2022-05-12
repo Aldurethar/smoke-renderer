@@ -1,10 +1,20 @@
+#pragma once
 #include "MyRenderer.hpp"
+
+#include <unordered_map>
+
 #include "FileIO.hpp"
 
+#include <QDebug>
 #include <QFileDialog>
 #include <QElapsedTimer>
+#include <iostream>
 
 #include <Eigen/Core>
+#include <assimp/Importer.hpp>
+#include <assimp/DefaultLogger.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
 
 //CONSTANTS
 static const int NUM_SMOKE_SLICES = 1024;
@@ -12,6 +22,28 @@ static const int SHADOWMAP_SIZE = 2048;
 static const int DEEPSHADOWMAP_SIZE = 512;
 static const float SHADOW_NEAR_FRUST = 1.0;
 static const float SHADOW_FAR_FRUST = 10.0;
+
+static GLenum glCheckError_(const char* file, int line)
+{
+	GLenum errorCode;
+	while ((errorCode = glGetError()) != GL_NO_ERROR)
+	{
+		std::string error;
+		switch (errorCode)
+		{
+		case GL_INVALID_ENUM:                  error = "INVALID_ENUM"; break;
+		case GL_INVALID_VALUE:                 error = "INVALID_VALUE"; break;
+		case GL_INVALID_OPERATION:             error = "INVALID_OPERATION"; break;
+		case GL_STACK_OVERFLOW:                error = "STACK_OVERFLOW"; break;
+		case GL_STACK_UNDERFLOW:               error = "STACK_UNDERFLOW"; break;
+		case GL_OUT_OF_MEMORY:                 error = "OUT_OF_MEMORY"; break;
+		case GL_INVALID_FRAMEBUFFER_OPERATION: error = "INVALID_FRAMEBUFFER_OPERATION"; break;
+		}
+		std::cout << "OpenGL Error: " << error << " | " << file << " (" << line << ")" << std::endl;
+	}
+	return errorCode;
+}
+#define glCheckError() glCheckError_(__FILE__, __LINE__)
 
 //Debug Screen Quad
 static float planeVertices[] = {
@@ -37,37 +69,135 @@ static float lightCol[] = {
 	1.0, 1.0, 1.0
 };
 
-Eigen::Matrix4d calculateInfinitePerspective(double verticalFieldOfView, double aspectRatio, double zNear)
+// helper array with the corner vertices of an icosahedron
+static float icosahedronVertices[] = {
+	0.000000f, -1.000000f, 0.000000f,
+	0.723600f, -0.447214f, 0.525720f,
+	-0.276386f, -0.447214f, 0.850640f,
+	-0.894424f, -0.447214f, 0.000000f,
+	-0.276386f, -0.447214f, -0.850640f,
+	0.723600f, -0.447214f, -0.525720f,
+	0.276386f, 0.447214f, 0.850640f,
+	-0.723600f, 0.447214f, 0.525720f,
+	-0.723600f, 0.447214f, -0.525720f,
+	0.276386f, 0.447214f, -0.850640f,
+	0.894424f, 0.447214f, 0.000000f,
+	0.000000f, 1.000000f, 0.000000f
+};
+
+// helper array of indices which form the triangular faces of an icosahedron
+static GLubyte icosahedronIndices[] = {
+	0, 1, 2,
+	1, 0, 5,
+	0, 2, 3,
+	0, 3, 4,
+	0, 4, 5,
+	1, 5, 10,
+	2, 1, 6,
+	3, 2, 7,
+	4, 3, 8,
+	5, 4, 9,
+	1, 10, 6,
+	2, 6, 7,
+	3, 7, 8,
+	4, 8, 9,
+	5, 9, 10,
+	6, 10, 11,
+	7, 6, 11,
+	8, 7, 11,
+	9, 8, 11,
+	10, 9, 11
+};
+
+namespace std
 {
-	auto range = std::tan(verticalFieldOfView / 2);
-	auto right = range * aspectRatio;
-	auto top = range;
+	// specialization of std::hash for std::pair so that std::unordered_map<std::pair<A,B>, T> can be used
+	template<typename A, typename B>
+	struct hash<pair<A, B>>
+	{
+		using argument_type = pair<A, B>;
+		using result_type = size_t;
+
+		result_type operator()(argument_type const& p) const noexcept
+		{
+			return hash<decay_t<A>>{}(p.first) ^ (hash<decay_t<B>>{}(p.second) << 1);
+		}
+	};
+}
+
+// helper function to subdivide a triangular mesh and project it onto the unit sphere
+static void subdivideIcosphere(std::vector<float>& vertices, std::vector<unsigned>& indices)
+{
+	std::unordered_map<std::pair<unsigned, unsigned>, unsigned> newVertexLookup;
+	// reserve number of vertices (= vertices.size() / 3) times 3, as total is multiplied by ~4 per subdivision
+	newVertexLookup.reserve(vertices.size());
+
+	auto midpointForEdge = [&](unsigned first, unsigned second) {
+		if (first > second)
+			std::swap(first, second);
+		auto inserted = newVertexLookup.insert({ {first, second}, static_cast<unsigned>(vertices.size() / 3) });
+		if (inserted.second)
+		{
+			Eigen::Map<Eigen::Vector3f> e0{ vertices.data() + 3 * first };
+			Eigen::Map<Eigen::Vector3f> e1{ vertices.data() + 3 * second };
+			auto newVertex = (e0 + e1).normalized();
+			vertices.insert(std::end(vertices), newVertex.data(), newVertex.data() + 3);
+		}
+		return inserted.first->second;
+	};
+
+	std::vector<unsigned> newIndices;
+	newIndices.reserve(4 * indices.size());
+
+	for (std::size_t i = 0; i < indices.size(); i += 3)
+	{
+		unsigned midpoints[3];
+		for (int e = 0; e < 3; ++e)
+			midpoints[e] = midpointForEdge(indices[i + e], indices[i + (e + 1) % 3]);
+		for (int e = 0; e < 3; ++e)
+		{
+			newIndices.emplace_back(indices[i + e]);
+			newIndices.emplace_back(midpoints[e]);
+			newIndices.emplace_back(midpoints[(e + 2) % 3]);
+		}
+		newIndices.insert(std::end(newIndices), std::begin(midpoints), std::end(midpoints));
+	}
+
+	indices.swap(newIndices);
+}
+
+// helper function to compute a perspective projection matrix with an infinite far range
+static Eigen::Matrix4d calculateInfinitePerspective(double minimumFieldOfView, double aspectRatio, double zNear)
+{
+	// linear field of view factor
+	auto range = std::tan(minimumFieldOfView / 2);
+
+	// scale factor for left/right depending on field of view and aspect ratio
+	auto right = aspectRatio >= 1.0 ? range * aspectRatio : range;
+
+	// scale factor for top/bottom depending on field of view and aspect ratio
+	auto top = aspectRatio >= 1.0 ? range : range / aspectRatio;
 
 	Eigen::Matrix4d P;
 	P <<
 		1 / right, 0, 0, 0,
 		0, 1 / top, 0, 0,
-		0, 0, -1, -2 * zNear,
+		0, 0, 0, -2 * zNear,
 		0, 0, -1, 0;
 	return P;
 }
 
-Eigen::Matrix4d calculateOrthograficPerspective(double right, double left, double top, double bottom, double nearFrust, double farFrust) {
-	Eigen::Matrix4d P;
-	P <<
-		2 / (right - left), 0, 0, 0,
-		0, 2 / (top - bottom), 0, 0,
-		0, 0, -2 / (farFrust - nearFrust), -((farFrust + nearFrust) / (farFrust - nearFrust)),
-		0, 0, 0, 1;
-	return P;
-}
-
-Eigen::Matrix4d calculateLookAtMatrix(Eigen::Vector3d eye, Eigen::Vector3d center, Eigen::Vector3d up)
+// helper function to compute a lookat-matrix (camera at eye, target at center, global up direction; up must be linearly independent of (center - eye))
+static Eigen::Matrix4d calculateLookAtMatrix(Eigen::Vector3d eye, Eigen::Vector3d center, Eigen::Vector3d up)
 {
+	// compute forward direction
 	Eigen::RowVector3d f = (eye - center).normalized();
+	// compute orthogonal sideways/right direction
 	Eigen::RowVector3d s = up.cross(f).normalized();
+	// compute orthogonal final up direction
 	Eigen::RowVector3d u = f.cross(s);
 
+	// s/u/f define a rotation matrix, inverse translation by rotated eye position, unit row in w for affine transformation
 	Eigen::Matrix4d M;
 	M <<
 		s, -s.dot(eye),
@@ -77,8 +207,32 @@ Eigen::Matrix4d calculateLookAtMatrix(Eigen::Vector3d eye, Eigen::Vector3d cente
 	return M;
 }
 
+// helper function to compute an orthografic projection matrix
+static Eigen::Matrix4d calculateOrthograficPerspective(double right, double left, double top, double bottom, double nearFrust, double farFrust) {
+	Eigen::Matrix4d P;
+	P <<
+		2 / (right - left), 0, 0, 0,
+		0, 2 / (top - bottom), 0, 0,
+		0, 0, -2 / (farFrust - nearFrust), -((farFrust + nearFrust) / (farFrust - nearFrust)),
+		0, 0, 0, 1;
+	return P;
+}
+
+// helper function to load a Qt resource as an array of char (bytes)
+static std::vector<char> loadResource(char const* path)
+{
+	QFile f(QString(":/") + QString::fromUtf8(path));
+	auto opened = f.open(QIODevice::ReadOnly);
+	assert(opened); (void)opened;
+	auto size = f.size();
+	std::vector<char> buf(size);
+	auto read = f.read(buf.data(), size);
+	assert(read == size); (void)read;
+	return buf;
+}
+
 //Import Mesh from given File
-bool importMesh(const std::string& fileName, int numberOfObject, std::vector<float>& verts, uint& numVerts, std::vector<uint>& indices, uint& numIndices, bool& hasTexCoords, std::string& name) {
+static bool importMesh(const std::string& fileName, int numberOfObject, std::vector<float>& verts, uint& numVerts, std::vector<uint>& indices, uint& numIndices, bool& hasTexCoords, std::string& name) {
 	//Create Importer
 	Assimp::Importer importer;
 	//Logger for Assimp
@@ -91,7 +245,7 @@ bool importMesh(const std::string& fileName, int numberOfObject, std::vector<flo
 		aiProcess_PreTransformVertices |
 		aiProcess_JoinIdenticalVertices |
 		aiProcess_FlipUVs
-		);
+	);
 
 	//Report Errors
 	if (!scene) {
@@ -157,7 +311,7 @@ bool importMesh(const std::string& fileName, int numberOfObject, std::vector<flo
 }
 
 //Load a Mesh from the file and set up all its parts
-bool loadMesh(const std::string& fileName, int number, QOpenGLVertexArrayObject& vao, QOpenGLBuffer& vertBuffer, QOpenGLBuffer& indBuffer, uint& indexCount, QOpenGLShaderProgram& program, bool& hasTexCoords) {
+static bool loadMesh(const std::string& fileName, int number, gl::VertexArray& vao, gl::Buffer& vertBuffer, gl::Buffer& indBuffer, uint& indexCount, gl::Program& program, bool& hasTexCoords) {
 
 	//Buffers for the imported data
 	std::vector<float> vertexData;
@@ -176,15 +330,11 @@ bool loadMesh(const std::string& fileName, int number, QOpenGLVertexArrayObject&
 		return false;
 	}
 
-	//Create Vertex Array Object that will hold all the Data for the Object to render
-	vao.create();
+	//Create and Bind Vertex Array Object that will hold all the Data for the Object to render
+	glBindVertexArray(vao.id());
 	{
-		//Bind VAO
-		QOpenGLVertexArrayObject::Binder boundVAO{ &vao };
-
 		//Create and fill Vertex Data Buffer
-		vertBuffer.create();
-		glBindBuffer(GL_ARRAY_BUFFER, vertBuffer.bufferId());
+		glBindBuffer(GL_ARRAY_BUFFER, vertBuffer.id());
 		if (hasTexCoords) {
 
 			glBufferData(GL_ARRAY_BUFFER, vertexCount * 8 * sizeof(float), vertexData.data(), GL_STATIC_DRAW);
@@ -205,32 +355,45 @@ bool loadMesh(const std::string& fileName, int number, QOpenGLVertexArrayObject&
 
 
 		//Create and fill Index Data Buffer
-		indBuffer.create();
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indBuffer.bufferId());
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indBuffer.id());
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexCount * sizeof(uint), &indexData[0], GL_STATIC_DRAW);
 
-		vao.release();
+		glBindVertexArray(0);
 	}
 
 	GLuint pid;
 	GLint loc;
 
 	//Create Shader Program
-	program.create();
 	{
 		//Add Shaders from file
+		gl::Shader vertexShader{ GL_VERTEX_SHADER };
+		gl::Shader fragmentShader{ GL_FRAGMENT_SHADER };
+
+		std::vector<char> vsText;
+		std::vector<char> fsText;
+
 		if (hasTexCoords) {
-			program.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/phong_textured.vert");
-			program.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/phong_textured.frag");
+			vsText = loadResource("shaders/phong_textured.vert");
+			fsText = loadResource("shaders/phong_textured.frag");
 		}
 		else {
-			program.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/phong_color.vert");
-			program.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/phong_color.frag");
+			vsText = loadResource("shaders/phong_color.vert");
+			fsText = loadResource("shaders/phong_color.frag");
 		}
-		program.link();
+
+		vertexShader.compile(vsText.data(), static_cast<GLint>(vsText.size()));
+		fragmentShader.compile(fsText.data(), static_cast<GLint>(fsText.size()));
+
+		// link shader program and check for errors. shader objects are no longer required
+		if (!program.link(vertexShader, fragmentShader))
+		{
+			qDebug() << "Shader compilation failed:\n" << program.infoLog().get();
+			std::abort();
+		}
 
 		//Bind Vertex Data Location
-		pid = program.programId();
+		pid = program.id();
 		glBindAttribLocation(pid, 0, "aPos");
 		glBindAttribLocation(pid, 1, "aNormal");
 		if (hasTexCoords) {
@@ -257,7 +420,7 @@ bool loadMesh(const std::string& fileName, int number, QOpenGLVertexArrayObject&
 
 //Create Bounding Box Vertices for the Smoke Data
 //Assumes a grid size of 1cm and Box centered on (0, 0, 0)
-std::vector<float> createSmokeBoundingBox(std::vector<size_t>& dims) {
+static std::vector<float> createSmokeBoundingBox(std::vector<size_t>& dims) {
 	std::vector<float> bb;
 	//+++
 	bb.push_back(dims[2] * 0.005);
@@ -296,16 +459,16 @@ std::vector<float> createSmokeBoundingBox(std::vector<size_t>& dims) {
 }
 
 //Load the Smoke Data from a File
-void loadSmokeData(const std::string& fileName, std::vector<float>& data, std::vector<size_t>& dims, std::vector<float>& boundingBox)
+static void loadSmokeData(const std::string& fileName, std::vector<float>& data, std::vector<size_t>& dims, std::vector<float>& boundingBox)
 {
 	bool succ = readField(fileName, data, dims);
 	while (!succ) {
-		qDebug() << "Could not read Smoke Data, please select another File!";
+		std::cout << "Could not read Smoke Data, please select another File!";
 		std::string newFileName = QFileDialog::getOpenFileName(Q_NULLPTR, "Open Smoke Data File", "", "Smoke Data (*.bin)").toStdString();
 		succ = readField(newFileName, data, dims);
 	}
 	boundingBox = createSmokeBoundingBox(dims);
-	qDebug() << "Successfully read Smoke Data!";
+	std::cout << "Successfully read Smoke Data!";
 
 
 	// Check Smoke Data statistics
@@ -317,8 +480,8 @@ void loadSmokeData(const std::string& fileName, std::vector<float>& data, std::v
 		int numNonInteger = 0;
 		for (int i = 0; i < data.size(); i++) {
 			float val = data[i];
-			maximum = max(val, maximum);
-			minimum = min(val, minimum);
+			maximum = fmax(val, maximum);
+			minimum = fmin(val, minimum);
 			avg += val;
 			if (val == 0) { numZero++; }
 			if (val != round(val)) { numNonInteger++; }
@@ -337,7 +500,7 @@ void loadSmokeData(const std::string& fileName, std::vector<float>& data, std::v
 }
 
 //Create the Planes for Smoke Slice Rendering
-void createSmokeRenderingPlanes(std::vector<float>& planesVerts, std::vector<GLuint>& planesInds) {
+static void createSmokeRenderingPlanes(std::vector<float>& planesVerts, std::vector<GLuint>& planesInds) {
 	//Measure Time
 	QElapsedTimer timer;
 	timer.start();
@@ -348,7 +511,7 @@ void createSmokeRenderingPlanes(std::vector<float>& planesVerts, std::vector<GLu
 	int numSteps = NUM_SMOKE_SLICES;
 	float stepSize = maxDepth / numSteps;
 
-	qDebug() << "Stepsize:" << stepSize;
+	std::cout << "Stepsize:" << stepSize;
 
 	planesVerts.clear();
 	planesInds.clear();
@@ -368,11 +531,11 @@ void createSmokeRenderingPlanes(std::vector<float>& planesVerts, std::vector<GLu
 		planesInds.push_back(offset + 1);
 		planesInds.push_back(offset + 3);
 	}
-	qDebug() << "Creating Smoke Planes took" << timer.nsecsElapsed() * 0.000001 << "ms";
+	std::cout << "Creating Smoke Planes took" << timer.nsecsElapsed() * 0.000001 << "ms";
 }
 
 //Transform Smoke Data into array of Vertices for Particle Rendering
-void processSmokeData(std::vector<float> data, std::vector<size_t> dims, std::vector<float>& smokeVerts, uint& numVerts)
+static void processSmokeData(std::vector<float> data, std::vector<size_t> dims, std::vector<float>& smokeVerts, uint& numVerts)
 {
 	QElapsedTimer timer;
 	timer.start();
@@ -391,6 +554,6 @@ void processSmokeData(std::vector<float> data, std::vector<size_t> dims, std::ve
 			}
 		}
 	}
-	qDebug() << "Processed Smoke Data into " << numVerts << " Vertices, making Array of size " << smokeVerts.size() << ", took " << timer.elapsed() << "ms";
+	std::cout << "Processed Smoke Data into " << numVerts << " Vertices, making Array of size " << smokeVerts.size() << ", took " << timer.elapsed() << "ms";
 
 }

@@ -16,5 +16,8 @@ public:
 	virtual void render() = 0;
 
 	virtual void mouseEvent(QMouseEvent * e) = 0;
-	virtual void wheelEvent(QWheelEvent * e) = 0;
+	virtual void wheelEvent(QWheelEvent* e) = 0;
+
+signals:
+	void update();
 };

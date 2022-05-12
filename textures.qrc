@@ -1,13 +1,5 @@
 <RCC>
     <qresource prefix="/">
-        <file>textures/earth_color.jpg</file>
-        <file>textures/stars_nx.jpg</file>
-        <file>textures/stars_ny.jpg</file>
-        <file>textures/stars_nz.jpg</file>
-        <file>textures/stars_px.jpg</file>
-        <file>textures/stars_py.jpg</file>
-        <file>textures/stars_pz.jpg</file>
-        <file>textures/testTex.png</file>
-        <file>textures/circle.png</file>
+        <file>textures/test.png</file>
     </qresource>
 </RCC>

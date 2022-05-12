@@ -13,6 +13,7 @@ namespace Ui
 }
 
 class OpenGLRenderer;
+class QShortcut;
 
 class GLMainWindow : public QMainWindow
 {
@@ -33,6 +34,7 @@ signals:
 	void openGLLoggingSynchronousChanged(bool synchronous);
 
 private slots:
+	// on_<x>_<y> slots are connected automatically by name when the ui is set up
 	void on_actionFullScreen_toggled(bool checked);
 	void on_actionFullScreenOpenGL_toggled(bool checked);
 	void on_actionAbout_triggered();

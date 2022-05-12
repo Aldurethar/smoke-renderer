@@ -71,5 +71,4 @@ void main()
 	vec3 lighting = ambient + (1 - shadow) * lightColor * color;
 
 	FragColor = vec4(lighting, density);
-	//FragColor = vec4(1.0, 0.0, 0.0, 1.0);
 }

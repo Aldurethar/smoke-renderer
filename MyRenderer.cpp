@@ -1,40 +1,49 @@
+#pragma once
 #include "MyRenderer.hpp"
-
 #include "MyRendererUtils.hpp"
 
+#include <QDebug>
+#include <QImage>
+#include <QMouseEvent>
+#include <QWheelEvent>
+
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
+
+#include <array>
+#include <unordered_map>
+#include <utility>
+#include <type_traits>
 
 #include <cmath>
-#include <iostream>
 
-static const bool RENDER_PARTICLES = true;
-static const bool RENDER_SLICES = false;
+static const bool RENDER_PARTICLES = false;
+static const bool RENDER_SLICES = true;
 static const bool RENDER_DEBUG = false;
 static const bool RENDER_OBJECT_SHADOWS = true;
 
-static const std::string defaultFileName = "C:\\Users\\Jan\\Desktop\\testscene.obj";
-static const std::string smokePath = "C:\\Users\\Jan\\Desktop\\smoke.bin";
+static const std::string defaultFileName = "models/testscene.obj";
+static const std::string smokePath = "models/smoke.bin";
 
-//static int lightCircleDegrees = 0;
 
 void MyRenderer::openScene(const std::string& fileName) {
 	uint currIndexCount;
-	QOpenGLBuffer currVertexBuffer = QOpenGLBuffer();
-	QOpenGLBuffer currIndexBuffer = QOpenGLBuffer();
-	QOpenGLVertexArrayObject *currVAO = new QOpenGLVertexArrayObject();
-	QOpenGLShaderProgram *currProgram = new QOpenGLShaderProgram();
+	gl::Buffer* currVertexBuffer = new gl::Buffer();
+	gl::Buffer* currIndexBuffer = new gl::Buffer();
+	gl::VertexArray* currVAO = new gl::VertexArray();
+	gl::Program* currProgram = new gl::Program();
 	bool currHasTexture;
 
 	std::string currentFileName = fileName;
 	int currentMesh = 0;
 	numObjectsInScene = 0;
 
-	bool successful = loadMesh(currentFileName, currentMesh, *currVAO, currVertexBuffer, currIndexBuffer, currIndexCount, *currProgram, currHasTexture);
+	bool successful = loadMesh(currentFileName, currentMesh, *currVAO, *currVertexBuffer, *currIndexBuffer, currIndexCount, *currProgram, currHasTexture);
 
 	while (!successful) {
 		qDebug() << "Could not open file or file did not contain an Object!";
 		currentFileName = QFileDialog::getOpenFileName(Q_NULLPTR, "Open Scene File", "", "Wavefront OBJ (*.obj)").toStdString();
-		successful = loadMesh(currentFileName, currentMesh, *currVAO, currVertexBuffer, currIndexBuffer, currIndexCount, *currProgram, currHasTexture);
+		successful = loadMesh(currentFileName, currentMesh, *currVAO, *currVertexBuffer, *currIndexBuffer, currIndexCount, *currProgram, currHasTexture);
 	}
 
 	while (successful) {
@@ -47,17 +56,17 @@ void MyRenderer::openScene(const std::string& fileName) {
 		numObjectsInScene++;
 
 		currIndexCount = 0;
-		currVertexBuffer = QOpenGLBuffer();
-		currIndexBuffer = QOpenGLBuffer();
-		currVAO = new QOpenGLVertexArrayObject();
-		currProgram = new QOpenGLShaderProgram();
+		currVertexBuffer = new gl::Buffer();
+		currIndexBuffer = new gl::Buffer();
+		currVAO = new gl::VertexArray();
+		currProgram = new gl::Program();
 
 		currentMesh++;
-		successful = loadMesh(currentFileName, currentMesh, *currVAO, currVertexBuffer, currIndexBuffer, currIndexCount, *currProgram, currHasTexture);
+		successful = loadMesh(currentFileName, currentMesh, *currVAO, *currVertexBuffer, *currIndexBuffer, currIndexCount, *currProgram, currHasTexture);
 	}
 }
 
-//Compute the near and far Frustum of the Smoke bounding Box from the camera's view
+//Compute the Frustum planes of the Smoke bounding Box from the camera's view
 //Putting all Smoke Rendering Slices within these Bounds will reduce Artifacts and unnecessary rendering of "empty" Slices
 void MyRenderer::computeSmokePlanes(Eigen::Matrix4d view) {
 	float maxX = 0.0f;
@@ -69,14 +78,14 @@ void MyRenderer::computeSmokePlanes(Eigen::Matrix4d view) {
 	for (int i = 0; i < 8; i++) {
 		Eigen::Vector4d point(smokeBoundingBox[3 * i + 0], smokeBoundingBox[3 * i + 1], smokeBoundingBox[3 * i + 2], 1.0);
 		point = view * point;
-		maxX = max(maxX, point.x());
-		minX = min(minX, point.x());
-		maxY = max(maxY, point.y());
-		minY = min(minY, point.y());
-		maxZ = max(maxZ, point.z());
-		minZ = min(minZ, point.z());
+		maxX = fmax(maxX, point.x());
+		minX = fmin(minX, point.x());
+		maxY = fmax(maxY, point.y());
+		minY = fmin(minY, point.y());
+		maxZ = fmax(maxZ, point.z());
+		minZ = fmin(minZ, point.z());
 	}
-	maxZ = min(maxZ, 0.0);
+	maxZ = fmin(maxZ, 0.0);
 	smokeNearPlane = maxZ;
 	smokeFarPlane = -minZ;
 	smokeLeftPlane = minX;
@@ -85,275 +94,373 @@ void MyRenderer::computeSmokePlanes(Eigen::Matrix4d view) {
 	smokeTopPlane = maxY;
 }
 
-MyRenderer::MyRenderer(QObject * parent)
+MyRenderer::MyRenderer(QObject* parent)
 	: OpenGLRenderer{ parent }
-	, cameraAzimuth{ 3.14159265 }
-	, cameraElevation{ 1.5707963267948966192313216916398 }
-	, zoomFactor{ 4.0 }
-	, testTexture{ QOpenGLTexture::Target2D }
-	, smokeDataTexture{ QOpenGLTexture::Target3D }
-	, deepShadowTexture{ QOpenGLTexture::Target2DArray }
-	, depthMapFBO{ SHADOWMAP_SIZE, SHADOWMAP_SIZE, QOpenGLFramebufferObject::Depth}
 {
-	//Query some Data about OpenGL's Limits
-	int workGroupCount[3];
-	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &workGroupCount[0]);
-	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 1, &workGroupCount[1]);
-	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 2, &workGroupCount[2]);
-	qDebug() << "Maximum Work Group Count:" << workGroupCount[0] << workGroupCount[1] << workGroupCount[2];
-	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &workGroupCount[0]);
-	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &workGroupCount[1]);
-	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &workGroupCount[2]);
-	qDebug() << "Maximum Work Group Size:" << workGroupCount[0] << workGroupCount[1] << workGroupCount[2];
-	glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &workGroupCount[2]);
-	qDebug() << "Maximum local Work Group Invocations:" << workGroupCount[2];
-	glGetIntegerv(GL_MAX_3D_TEXTURE_SIZE, &workGroupCount[1]);
-	qDebug() << "Maximum 3D Texture Size:" << workGroupCount[1];
-
-	//Setup Render Timer
-	timer.setSampleCount(6);
-	timer.create();	
-
-	//Load Scene Meshes
-	openScene(defaultFileName);
-
-	//Load Smoke Data
-	loadSmokeData(smokePath, smokeData, smokeDims, smokeBoundingBox);
-	
-	//Swap x and z axis of test smoke data
 	{
-		std::vector<float> newSmokeData;
-		for (int x = 0; x < smokeDims[0]; x++) {
-			for (int y = 0; y < smokeDims[1]; y++) {
-				for (int z = 0; z < smokeDims[2]; z++) {
-					int pos = x + y * (int)smokeDims[0] + z * (int)smokeDims[0] * (int)smokeDims[1];
-					newSmokeData.push_back(smokeData[pos]);
+		//Load Scene Meshes
+		openScene(defaultFileName);
+
+		//Load Smoke Data
+		loadSmokeData(smokePath, smokeData, smokeDims, smokeBoundingBox);
+
+		//Swap x and z axis of test smoke data
+		{
+			std::vector<float> newSmokeData;
+			for (int x = 0; x < smokeDims[0]; x++) {
+				for (int y = 0; y < smokeDims[1]; y++) {
+					for (int z = 0; z < smokeDims[2]; z++) {
+						int pos = x + y * (int)smokeDims[0] + z * (int)smokeDims[0] * (int)smokeDims[1];
+						newSmokeData.push_back(smokeData[pos]);
+					}
 				}
 			}
+			smokeData.swap(newSmokeData);
+			size_t temp = smokeDims[0];
+			smokeDims[0] = smokeDims[2];
+			smokeDims[2] = temp;
+
+			smokeBoundingBox = createSmokeBoundingBox(smokeDims);
 		}
-		smokeData.swap(newSmokeData);
-		size_t temp = smokeDims[0];
-		smokeDims[0] = smokeDims[2];
-		smokeDims[2] = temp;
-	}
 
+		//Setup Smoke Particle Rendering
+		if (RENDER_PARTICLES) {
 
-	//Process Smoke Data into Particle Vertices
-	//TESTING
-	//if (RENDER_PARTICLES)	processSmokeData(smokeData, smokeDims, smokePartVertices, smokePartCount);
-	//Create Slices for Smoke Rendering
-	std::vector<float> smokeBoundingBox = createSmokeBoundingBox(smokeDims);
-	if (RENDER_SLICES) createSmokeRenderingPlanes(smokeSliceVertices, smokeSliceIndices);
+			//Initialize Smoke Particle VAO
+			{
+				glBindVertexArray(smokePartVAO.id());
+				//glBindBuffer(GL_ARRAY_BUFFER, smokePartVertexBuffer.bufferId());
+				//glBufferData(GL_ARRAY_BUFFER, smokePartVertices.size() * sizeof(float), smokePartVertices.data(), GL_STATIC_DRAW);
+				glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+				glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (GLvoid*)(3 * sizeof(float)));
+				glEnableVertexAttribArray(0);
+				glEnableVertexAttribArray(1);
+				glBindVertexArray(0);
+				glCheckError();
+			}
 
-	//Setup Smoke Particle Rendering
-	if (RENDER_PARTICLES) {
+			//Initialize Smoke Particle Shader Program
+			{
+				gl::Shader vertexShader{ GL_VERTEX_SHADER };
+				gl::Shader fragmentShader{ GL_FRAGMENT_SHADER };
 
-		//Initialize Smoke Particle VAO
+				std::vector<char> vsText;
+				std::vector<char> fsText;
+
+				vsText = loadResource("shaders/smokeParticle.vert");
+				fsText = loadResource("shaders/smokeParticle.frag");
+
+				vertexShader.compile(vsText.data(), static_cast<GLint>(vsText.size()));
+				fragmentShader.compile(fsText.data(), static_cast<GLint>(fsText.size()));
+
+				if (!smokePartProgram.link(vertexShader, fragmentShader))
+				{
+					qDebug() << "Shader compilation failed:\n" << smokePartProgram.infoLog().get();
+					std::abort();
+				}
+
+				GLuint pid = smokePartProgram.id();
+				glBindAttribLocation(pid, 0, "aPos");
+				glBindAttribLocation(pid, 1, "aDensity");
+				glCheckError();
+			}
+		}
+
+		//Setup Smoke Slice Rendering
+		if (RENDER_SLICES) {
+
+			//Create Slice Planes
+			createSmokeRenderingPlanes(smokeSliceVertices, smokeSliceIndices);
+
+			//Initialize Smoke Slice VAO
+			{
+				glBindVertexArray(smokeSliceVAO.id());
+
+				glBindBuffer(GL_ARRAY_BUFFER, smokeSliceVertexBuffer.id());
+				glBufferData(GL_ARRAY_BUFFER, smokeSliceVertices.size() * sizeof(float), smokeSliceVertices.data(), GL_STATIC_DRAW);
+				glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+				glEnableVertexAttribArray(0);
+
+				glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, smokeSliceIndexBuffer.id());
+				glBufferData(GL_ELEMENT_ARRAY_BUFFER, smokeSliceIndices.size() * sizeof(uint), smokeSliceIndices.data(), GL_STATIC_DRAW);
+
+				glBindVertexArray(0);
+				glCheckError();
+				qDebug() << "Smoke Slices have" << smokeSliceVertices.size() << "Vertex Entries and" << smokeSliceIndices.size() << "Index Entries!";
+			}
+
+			//Initialize Smoke Slice Shader Program
+			{
+				gl::Shader vertexShader{ GL_VERTEX_SHADER };
+				gl::Shader fragmentShader{ GL_FRAGMENT_SHADER };
+
+				std::vector<char> vsText;
+				std::vector<char> fsText;
+
+				vsText = loadResource("shaders/smokeSlice.vert");
+				fsText = loadResource("shaders/smokeSlice.frag");
+
+				vertexShader.compile(vsText.data(), static_cast<GLint>(vsText.size()));
+				fragmentShader.compile(fsText.data(), static_cast<GLint>(fsText.size()));
+
+				if (!smokeSliceProgram.link(vertexShader, fragmentShader))
+				{
+					qDebug() << "Shader compilation failed:\n" << smokeSliceProgram.infoLog().get();
+					std::abort();
+				}
+				glCheckError();
+			}
+		}
+
+		//Setup Debug Quad
+		if (RENDER_DEBUG) {
+			//Initialize VAO
+			{
+				glBindVertexArray(debugVAO.id());
+				glBindBuffer(GL_ARRAY_BUFFER, debugVertexBuffer.id());
+				glBufferData(GL_ARRAY_BUFFER, 4 * 5 * sizeof(float), planeVertices, GL_STATIC_DRAW);
+				glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
+				glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (GLvoid*)(3 * sizeof(float)));
+				glEnableVertexAttribArray(0);
+				glEnableVertexAttribArray(1);
+
+				glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, debugIndexBuffer.id());
+				glBufferData(GL_ELEMENT_ARRAY_BUFFER, 6 * sizeof(uint), planeIndices, GL_STATIC_DRAW);
+
+				glBindVertexArray(0);
+				glCheckError();
+			}
+
+			//Initialize Shader Program
+			{
+				gl::Shader vertexShader{ GL_VERTEX_SHADER };
+				gl::Shader fragmentShader{ GL_FRAGMENT_SHADER };
+
+				std::vector<char> vsText;
+				std::vector<char> fsText;
+
+				vsText = loadResource("shaders/debug.vert");
+				fsText = loadResource("shaders/debug.frag");
+
+				vertexShader.compile(vsText.data(), static_cast<GLint>(vsText.size()));
+				fragmentShader.compile(fsText.data(), static_cast<GLint>(fsText.size()));
+
+				if (!debugQuadProgram.link(vertexShader, fragmentShader))
+				{
+					qDebug() << "Shader compilation failed:\n" << debugQuadProgram.infoLog().get();
+					std::abort();
+				}
+				glCheckError();
+			}
+		}
+
+		//Initialize Smoke Data 3D Texture
 		{
-			smokePartVAO.create();
-			smokePartVAO.bind();
-			smokePartVertexBuffer.create();
-			//glBindBuffer(GL_ARRAY_BUFFER, smokePartVertexBuffer.bufferId());
-			//glBufferData(GL_ARRAY_BUFFER, smokePartVertices.size() * sizeof(float), smokePartVertices.data(), GL_STATIC_DRAW);
-			glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
-			glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (GLvoid*)(3 * sizeof(float)));
-			glEnableVertexAttribArray(0);
-			glEnableVertexAttribArray(1);
-			smokePartVAO.release();
+			glBindTexture(GL_TEXTURE_3D, smokeDataTexture.id());
+			glTexImage3D(GL_TEXTURE_3D, 0, GL_R32F, (int)smokeDims[0], (int)smokeDims[1], (int)smokeDims[2], 0, GL_RED, GL_FLOAT, smokeData.data());
+
+			float borderColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			glTexParameterfv(GL_TEXTURE_3D, GL_TEXTURE_BORDER_COLOR, borderColor);
+			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER);
+			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+			glCheckError();
 		}
 
-		//Initialize Smoke Particle Shader Program
+		//Initialize Object Texture
 		{
-			smokePartProgram.create();
-			smokePartProgram.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/smokeParticle.vert");
-			smokePartProgram.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/smokeParticle.frag");
-			smokePartProgram.link();
+			auto img = QImage(":/textures/test.png").convertToFormat(QImage::Format_RGBA8888).mirrored();
+			glBindTexture(GL_TEXTURE_2D, testTexture.id());
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, img.width(), img.height(), 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, img.constBits());
 
-			GLuint pid = smokePartProgram.programId();
-			glBindAttribLocation(pid, 0, "aPos");
-			glBindAttribLocation(pid, 1, "aDensity");
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+			glCheckError();
 		}
-	}
 
-	//Setup Smoke Slice Rendering
-	if (RENDER_SLICES) {
-
-		//Initialize Smoke Slice VAO
+		//Initialize Deep Shadow Map Texture
 		{
-			smokeSliceVAO.create();
-			smokeSliceVAO.bind();
-			smokeSliceVertexBuffer.create();
-			glBindBuffer(GL_ARRAY_BUFFER, smokeSliceVertexBuffer.bufferId());
-			glBufferData(GL_ARRAY_BUFFER, smokeSliceVertices.size() * sizeof(float), smokeSliceVertices.data(), GL_STATIC_DRAW);
-			glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-			glEnableVertexAttribArray(0);
-			smokeSliceIndexBuffer.create();
-			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, smokeSliceIndexBuffer.bufferId());
-			glBufferData(GL_ELEMENT_ARRAY_BUFFER, smokeSliceIndices.size() * sizeof(uint), smokeSliceIndices.data(), GL_STATIC_DRAW);
-			smokeSliceVAO.release();
+			glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.id());
+			glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RG16F, DEEPSHADOWMAP_SIZE, DEEPSHADOWMAP_SIZE, 8, 0, GL_RG, GL_HALF_FLOAT, NULL);
 
-			qDebug() << "Smoke Slices have" << smokeSliceVertices.size() << "Vertex Entries and" << smokeSliceIndices.size() << "Index Entries!";
+			float borderColor[] = { -10.0f, 1.0f, 1.0f, 0.0f };
+			glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
+			glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER);
+			glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+			glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+
+			glBindImageTexture(2, deepShadowTexture.id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RG16F);
+			glCheckError();
 		}
 
-		//Initialize Smoke Slice Shader Program
+		//Initialize Depth Map Texture and FBO
 		{
-			smokeSliceProgram.create();
-			smokeSliceProgram.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/smokeSlice.vert");
-			smokeSliceProgram.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/smokeSlice.frag");
-			smokeSliceProgram.link();
+			glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO.id());
+
+			glBindTexture(GL_TEXTURE_2D, depthTexture.id());
+
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, SHADOWMAP_SIZE, SHADOWMAP_SIZE, 0, GL_RED, GL_FLOAT, NULL);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, depthTexture.id(), 0);
+
+			unsigned int rbo;
+			glGenRenderbuffers(1, &rbo);
+			glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+
+			glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, SHADOWMAP_SIZE, SHADOWMAP_SIZE);
+			glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo);
+			glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+			glCheckError();
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 		}
-	}
 
-	//Initialize Smoke Data 3D Texture
-	{
-		this->smokeDataTexture.create();
-		this->smokeDataTexture.bind();
-		this->smokeDataTexture.setFormat(QOpenGLTexture::R32F);
-		this->smokeDataTexture.setSize((int)smokeDims[0], (int)smokeDims[1], (int)smokeDims[2]);
-		this->smokeDataTexture.setBorderColor(0.0f, 0.0f, 0.0f, 0.0f);
-		this->smokeDataTexture.setWrapMode(QOpenGLTexture::ClampToBorder);
-		this->smokeDataTexture.setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
-		this->smokeDataTexture.allocateStorage();
-		this->smokeDataTexture.setData(QOpenGLTexture::Red, QOpenGLTexture::Float32, smokeData.data());
-		this->smokeDataTexture.release();
-	}
-
-	//Initialize Object Texture
-	{
-		this->testTexture.create();
-		this->testTexture.bind();
-		this->testTexture.setData(QImage(":/textures/testTex.png"));
-		this->testTexture.setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
-		this->testTexture.setMagnificationFilter(QOpenGLTexture::Linear);
-		this->testTexture.setWrapMode(QOpenGLTexture::DirectionS, QOpenGLTexture::Repeat);
-		this->testTexture.setWrapMode(QOpenGLTexture::DirectionT, QOpenGLTexture::Repeat);
-		this->testTexture.release();
-	}
-	
-	//Initialize Depth Shader Program
-	{
-		depthProgram.create();
-		depthProgram.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/depth.vert");
-		depthProgram.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/depth.frag");
-		depthProgram.link();
-	}
-
-	//Debug Quad Initialization
-	if (RENDER_DEBUG) {
-		//Initialize VAO
+		//Initialize Depth Shader Program
 		{
-			debugVAO.create();
-			debugVAO.bind();
-			debugVertexBuffer.create();
-			glBindBuffer(GL_ARRAY_BUFFER, debugVertexBuffer.bufferId());
-			glBufferData(GL_ARRAY_BUFFER, 4 * 5 * sizeof(float), planeVertices, GL_STATIC_DRAW);
-			glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
-			glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (GLvoid*)(3 * sizeof(float)));
-			glEnableVertexAttribArray(0);
-			glEnableVertexAttribArray(1);
-			debugIndexBuffer.create();
-			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, debugIndexBuffer.bufferId());
-			glBufferData(GL_ELEMENT_ARRAY_BUFFER, 6 * sizeof(uint), planeIndices, GL_STATIC_DRAW);
-			debugVAO.release();
+			gl::Shader vertexShader{ GL_VERTEX_SHADER };
+			gl::Shader fragmentShader{ GL_FRAGMENT_SHADER };
+
+			std::vector<char> vsText;
+			std::vector<char> fsText;
+
+			vsText = loadResource("shaders/depth.vert");
+			fsText = loadResource("shaders/depth.frag");
+
+			vertexShader.compile(vsText.data(), static_cast<GLint>(vsText.size()));
+			fragmentShader.compile(fsText.data(), static_cast<GLint>(fsText.size()));
+
+			if (!depthProgram.link(vertexShader, fragmentShader))
+			{
+				qDebug() << "Shader compilation failed:\n" << depthProgram.infoLog().get();
+				std::abort();
+			}
+			glCheckError();
 		}
 
-		//Initialize Shader Program
+		//Initialize Deep Shadow Map Shader Program
 		{
-			debugQuadProgram.create();
-			debugQuadProgram.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/debug.vert");
-			debugQuadProgram.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/debug.frag");
-			debugQuadProgram.link();
+			gl::Shader computeShader{ GL_COMPUTE_SHADER };
+
+			std::vector<char> csText;
+			csText = loadResource("shaders/deepShadowMap.comp");
+			computeShader.compile(csText.data(), static_cast<GLint>(csText.size()));
+
+			if (!deepShadowProgram.link(computeShader))
+			{
+				qDebug() << "Shader compilation failed:\n" << deepShadowProgram.infoLog().get();
+				std::abort();
+			}
+			glCheckError();
+
 		}
+
+		//Initialize Smoke Particle Creation Shader Program and Buffer
+		{
+			int bufferSize = smokeDims[0] * smokeDims[1] * smokeDims[2];
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, smokePartCompBuffer.id());
+			glBufferData(GL_SHADER_STORAGE_BUFFER, bufferSize * 4 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+			glCheckError();
+
+			gl::Shader computeShader{ GL_COMPUTE_SHADER };
+
+			std::vector<char> csText;
+			csText = loadResource("shaders/particleCreation.comp");
+			computeShader.compile(csText.data(), static_cast<GLint>(csText.size()));
+
+			if (!particleCreationProgram.link(computeShader))
+			{
+				qDebug() << "Shader compilation failed:\n" << particleCreationProgram.infoLog().get();
+				std::abort();
+			}
+			glCheckError();
+
+			glBindAttribLocation(particleCreationProgram.id(), 1, "outBuffer");
+		}
+
+
 	}
-
-	//Initialize Deep Shadow Map Texture
-	{
-		deepShadowTexture.create();
-		deepShadowTexture.bind();
-		deepShadowTexture.setFormat(QOpenGLTexture::RG16F);
-		deepShadowTexture.setSize(DEEPSHADOWMAP_SIZE, DEEPSHADOWMAP_SIZE);
-		deepShadowTexture.setLayers(8);
-		deepShadowTexture.setBorderColor(-10.0f, 1.0f, 1.0f, 0.0f);
-		deepShadowTexture.setWrapMode(QOpenGLTexture::ClampToBorder);
-		deepShadowTexture.setMinMagFilters(QOpenGLTexture::Nearest, QOpenGLTexture::Nearest);
-		deepShadowTexture.allocateStorage(QOpenGLTexture::RG, QOpenGLTexture::Float16);
-		glBindImageTexture(2, deepShadowTexture.textureId(), 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RG16F);
-		deepShadowTexture.release();
-	}
-
-	//Initialize Deep Shadow Map Shader Program
-	{
-		deepShadowProgram.create();
-		deepShadowProgram.addShaderFromSourceFile(QOpenGLShader::Compute, ":/shaders/deepShadowMap.comp");
-		deepShadowProgram.link();
-	}
-
-	//Initialize Smoke Particle Creation Shader Program and Buffer
-	{
-		int bufferSize = smokeDims[0] * smokeDims[1] * smokeDims[2];
-		smokePartCompBuffer.create();
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, smokePartCompBuffer.bufferId());
-		glBufferData(GL_SHADER_STORAGE_BUFFER, bufferSize * 4 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
-
-		particleCreationProgram.create();
-		particleCreationProgram.addShaderFromSourceFile(QOpenGLShader::Compute, ":/shaders/particleCreation.comp");
-		particleCreationProgram.link();
-
-		particleCreationProgram.bindAttributeLocation("outBuffer", 1);
-	}
+	this->timer.start();
 }
 
-void MyRenderer::render() {
+void MyRenderer::resize(int w, int h)
+{
+	this->width = w;
+	this->height = h;
+	// update projection matrix to account for (potentially) changed aspect ratio
+	this->projectionMatrix = calculateInfinitePerspective(
+		0.78539816339744831, // 45 degrees in radians
+		static_cast<double>(w) / h,
+		0.01 // near plane (chosen "at random")
+	);
+}
 
-	//Reset render Timer
-	timer.reset();
-	
+void MyRenderer::render()
+{
+	auto currentTimeNS = this->timer.nsecsElapsed();
+	auto deltaTimeNS = currentTimeNS - this->lastTimeNS;
+	this->lastTimeNS = currentTimeNS;
+
+	int loc = -1;
+
 	//Move the Light
 	{
-		lightCircleDegrees = (lightCircleDegrees + 1) % 360;
-		float x = cos(M_PI * lightCircleDegrees / 180);
-		float y = sin(M_PI * lightCircleDegrees / 180);
-		lightPos[0] = x * 5.0;
-		lightPos[1] = y * 5.0;
+		auto sa = std::sin(lightAzimuth);
+		auto ca = std::cos(lightAzimuth);
+		auto se = std::sin(lightElevation);
+		auto ce = std::cos(lightElevation);
+		auto distance = 5.0;
+		lightPos[0] = distance * se * ca;
+		lightPos[1] = distance * se * sa;
+		lightPos[2] = distance * ce;
 	}
 
 	//Compute Matrices
 	{
-		//Calculate View Matrix from Camera Position
+		// recompute view matrix (camera position and direction) from azimuth/elevation
 		{
 			auto sa = std::sin(this->cameraAzimuth);
 			auto ca = std::cos(this->cameraAzimuth);
 			auto se = std::sin(this->cameraElevation);
 			auto ce = std::cos(this->cameraElevation);
-			cameraPos[0] = zoomFactor * se * ca;
-			cameraPos[1] = zoomFactor * se * sa;
-			cameraPos[2] = zoomFactor * ce;
-			viewMatrix = calculateLookAtMatrix(
-			{ cameraPos[0], cameraPos[1], cameraPos[2] },
-			{ 0, 0, 0 },
-			{ -ce * ca, -ce * sa, se }
+			auto distance = this->zoomFactor;
+
+			cameraPos[0] = distance * se * ca;
+			cameraPos[1] = distance * se * sa;
+			cameraPos[2] = distance * ce;
+
+			this->viewMatrix = calculateLookAtMatrix(
+				distance * Eigen::Vector3d{ se * ca, se * sa, ce },
+				{ 0, 0, 0 },
+				{ 0, 0, 1 }
 			);
 			inverseViewMatrix = viewMatrix.inverse();
 		}
 
-		//Calculate Orthografic Projection Matrix for Light
+		//Calculate Orthographic Projection Matrix for Light
 		lightProjectionMatrix = calculateOrthograficPerspective(2.5, -2.5, 2.5, -2.5, SHADOW_NEAR_FRUST, SHADOW_FAR_FRUST);
-
-		
 
 		//Calculate View Matrix from Light's perspective
 		lightViewMatrix = calculateLookAtMatrix(
-		{ lightPos[0], lightPos[1], lightPos[2] },
-		{ 0, 0, 0 },
-		{ 0.0, 1.0, 0.0 }
+			{ lightPos[0], lightPos[1], lightPos[2] },
+			{ 0, 0, 0 },
+			{ 0.0, 1.0, 0.0 }
 		);
 
 		inverseLightViewMatrix = lightViewMatrix.inverse();
 
 	}
-
-	//Use this for Wireframe Mode
-	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_LEQUAL);
@@ -370,18 +477,15 @@ void MyRenderer::render() {
 	glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	GLint loc;
-
 	//Run Compute Shader to create Deep Shadow Map
-	timer.recordSample();
 	{
 		Eigen::Vector3f light = Eigen::Vector3f(lightPos);
 		computeSmokePlanes(lightViewMatrix);
 
-		//Calculate Smaller Orthografic Projection for Deep Shadow Map to increase precision
+		//Calculate Smaller Orthographic Projection for Deep Shadow Map to increase precision
 		dsmProjectionMatrix = calculateOrthograficPerspective(smokeRightPlane, smokeLeftPlane, smokeTopPlane, smokeBottomPlane, SHADOW_NEAR_FRUST, SHADOW_FAR_FRUST);
 
-		auto pid = deepShadowProgram.programId();
+		auto pid = deepShadowProgram.id();
 		glUseProgram(pid);
 		loc = glGetUniformLocation(pid, "lightPos");
 		glUniform3fv(loc, 1, lightPos);
@@ -405,18 +509,19 @@ void MyRenderer::render() {
 		loc = glGetUniformLocation(pid, "smokeData");
 		glUniform1i(loc, 0);
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_3D, smokeDataTexture.textureId());
+		glBindTexture(GL_TEXTURE_3D, smokeDataTexture.id());
+		glCheckError();
 
-		glDispatchCompute(DEEPSHADOWMAP_SIZE/16, DEEPSHADOWMAP_SIZE/16, 1);
+		glDispatchCompute(DEEPSHADOWMAP_SIZE / 16, DEEPSHADOWMAP_SIZE / 16, 1);
+		glCheckError();
 	}
 
 	//Run Compute Shader for Creating Smoke Particles
-	timer.recordSample();
 	{
 		//TEST
-		qDebug() << "Cam Pos:" << cameraPos[0] << cameraPos[1] << cameraPos[2];
+		//qDebug() << "Cam Pos:" << cameraPos[0] << cameraPos[1] << cameraPos[2];
 
-		auto pid = particleCreationProgram.programId();
+		auto pid = particleCreationProgram.id();
 		glUseProgram(pid);
 
 		loc = glGetUniformLocation(pid, "camPos");
@@ -427,19 +532,22 @@ void MyRenderer::render() {
 		loc = glGetUniformLocation(pid, "smokeData");
 		glUniform1i(loc, 0);
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_3D, smokeDataTexture.textureId());
+		glBindTexture(GL_TEXTURE_3D, smokeDataTexture.id());
 
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, smokePartCompBuffer.bufferId());
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, smokePartCompBuffer.id());
+		glCheckError();
+
 		glDispatchCompute(smokeDims[0] / 8, smokeDims[1] / 8, smokeDims[2] / 8);
+		glCheckError();
 	}
 
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+	glGetIntegerv(GL_VIEWPORT, viewportSize);
 
 	//Render to Depth Map
-	timer.recordSample();
 	{
 		//Use the program
-		auto pid = this->depthProgram.programId();
+		auto pid = this->depthProgram.id();
 		glUseProgram(pid);
 
 		//Insert Light Space Conversion matrix into program
@@ -447,37 +555,37 @@ void MyRenderer::render() {
 		glUniformMatrix4fv(loc, 1, GL_FALSE, (lightProjectionMatrix * lightViewMatrix).cast<float>().eval().data());
 
 		//Resize Viewport to Shadow Map Size
-		glGetIntegerv(GL_VIEWPORT, viewportSize);
 		glViewport(0, 0, SHADOWMAP_SIZE, SHADOWMAP_SIZE);
-		depthMapFBO.bind();
+		glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO.id());
 		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		//Render Scene
-		if(RENDER_OBJECT_SHADOWS){
+		if (RENDER_OBJECT_SHADOWS) {
 			for (int i = 0; i < numObjectsInScene; i++) {
-				sceneVAOs[i]->bind();
+				glBindVertexArray(sceneVAOs[i]->id());
 				glDrawElements(GL_TRIANGLES, sceneIndexCounts[i], GL_UNSIGNED_INT, nullptr);
-				sceneVAOs[i]->release();
+				glBindVertexArray(0);
 			}
 		}
-
+		glCheckError();
 		//Cleanup
-		depthMapFBO.release();
+		glViewport(viewportSize[0], viewportSize[1], viewportSize[2], viewportSize[3]);
+		//Instead of the default (0) Framebuffer, we go back to Framebuffer 2 because Qt doesn't use the default one
+		glBindFramebuffer(GL_FRAMEBUFFER, 2);
 	}
 
+
 	//Reset the Viewport
-	glViewport(viewportSize[0], viewportSize[1], viewportSize[2], viewportSize[3]);
-	glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+	glClearColor(0.21f, 0.74f, 0.95f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	
+
 	//Render the Scene
-	timer.recordSample();
 	{
 		for (int i = 0; i < numObjectsInScene; i++) {
-			sceneVAOs[i]->bind();
+			glBindVertexArray(sceneVAOs[i]->id());
 
-			auto pid = scenePrograms[i]->programId();
+			auto pid = scenePrograms[i]->id();
 			glUseProgram(pid);
 
 			//Insert View/Projection Matrix into Program
@@ -506,43 +614,44 @@ void MyRenderer::render() {
 				loc = glGetUniformLocation(pid, "colorTexture");
 				glUniform1i(loc, 0);
 				glActiveTexture(GL_TEXTURE0);
-				glBindTexture(GL_TEXTURE_2D, testTexture.textureId());
+				glBindTexture(GL_TEXTURE_2D, testTexture.id());
 
 				//Insert Shadow Map
 				loc = glGetUniformLocation(pid, "shadowMap");
 				glUniform1i(loc, 1);
 				glActiveTexture(GL_TEXTURE1);
-				glBindTexture(GL_TEXTURE_2D, depthMapFBO.texture());
+				glBindTexture(GL_TEXTURE_2D, depthTexture.id());
 
 				//Insert Deep Shadow Map
 				loc = glGetUniformLocation(pid, "deepShadowMap");
 				glUniform1i(loc, 2);
 				glActiveTexture(GL_TEXTURE2);
-				glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.textureId());
+				glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.id());
 			}
 			else {
 				//Insert Shadow Map
 				loc = glGetUniformLocation(pid, "shadowMap");
 				glUniform1i(loc, 0);
 				glActiveTexture(GL_TEXTURE0);
-				glBindTexture(GL_TEXTURE_2D, depthMapFBO.texture());
+				glBindTexture(GL_TEXTURE_2D, depthTexture.id());
 
 				//Insert Deep Shadow Map
 				loc = glGetUniformLocation(pid, "deepShadowMap");
 				glUniform1i(loc, 1);
 				glActiveTexture(GL_TEXTURE1);
-				glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.textureId());
+				glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.id());
 			}
 
 			//Render the Object
 			glDrawElements(GL_TRIANGLES, sceneIndexCounts[i], GL_UNSIGNED_INT, nullptr);
+			glCheckError();
 		}
 	}
 
 	//Render the Debug Quad
 	if (RENDER_DEBUG) {
 		//Use the program
-		auto pid = debugQuadProgram.programId();
+		auto pid = debugQuadProgram.id();
 		glUseProgram(pid);
 
 		//Insert the parameters
@@ -553,24 +662,23 @@ void MyRenderer::render() {
 		loc = glGetUniformLocation(pid, "debugTexture");
 		glUniform1i(loc, 0);
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.textureId());
+		glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.id());
 
 		//Bind VAO
-		this->debugVAO.bind();
+		glBindVertexArray(debugVAO.id());
 		//draw the Quad
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 
-		debugVAO.release();
+		glBindVertexArray(0);
 	}
 
 	//Render the Smoke Slices
-	timer.recordSample();
 	if (RENDER_SLICES) {
 		//Compute Near and Far Planes of the Smoke Volume
 		computeSmokePlanes(viewMatrix);
 
 		//Use the program
-		auto pid = smokeSliceProgram.programId();
+		auto pid = smokeSliceProgram.id();
 		glUseProgram(pid);
 
 		//Insert the Parameters
@@ -604,27 +712,27 @@ void MyRenderer::render() {
 		loc = glGetUniformLocation(pid, "smokeData");
 		glUniform1i(loc, 0);
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_3D, smokeDataTexture.textureId());
+		glBindTexture(GL_TEXTURE_3D, smokeDataTexture.id());
 		//glBindTexture(GL_TEXTURE_3D, shadowVolumeTexture.textureId());
 
 		//Insert Shadow Map
 		loc = glGetUniformLocation(pid, "shadowMap");
 		glUniform1i(loc, 1);
 		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D, depthMapFBO.texture());
+		glBindTexture(GL_TEXTURE_2D, depthTexture.id());
 
 		//Insert Deep Shadow Map
 		loc = glGetUniformLocation(pid, "deepShadowMap");
 		glUniform1i(loc, 2);
 		glActiveTexture(GL_TEXTURE2);
-		glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.textureId());
+		glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.id());
 
 		//Bind VAO
-		this->smokeSliceVAO.bind();
+		glBindVertexArray(smokeSliceVAO.id());
 		//Draw
 		glDrawElements(GL_TRIANGLES, (int)smokeSliceIndices.size(), GL_UNSIGNED_INT, nullptr);
 
-		smokeSliceVAO.release();
+		glBindVertexArray(0);
 	}
 
 	//Render the Smoke Particles
@@ -636,7 +744,7 @@ void MyRenderer::render() {
 		glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
 
 		//Use the program
-		auto pid = smokePartProgram.programId();
+		auto pid = smokePartProgram.id();
 		glUseProgram(pid);
 
 		//Insert Uniforms
@@ -652,109 +760,120 @@ void MyRenderer::render() {
 		glUniformMatrix4fv(loc, 1, GL_FALSE, (lightProjectionMatrix).cast<float>().eval().data());
 		loc = glGetUniformLocation(pid, "dsmProjectionMatrix");
 		glUniformMatrix4fv(loc, 1, GL_FALSE, (dsmProjectionMatrix).cast<float>().eval().data());
-		
+
 		//Insert Textures
 		//Insert Shadow Map
 		loc = glGetUniformLocation(pid, "shadowMap");
 		glUniform1i(loc, 0);
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, depthMapFBO.texture());
+		glBindTexture(GL_TEXTURE_2D, depthTexture.id());
 
 		//Insert Deep Shadow Map
 		loc = glGetUniformLocation(pid, "deepShadowMap");
 		glUniform1i(loc, 1);
 		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.textureId());
+		glBindTexture(GL_TEXTURE_2D_ARRAY, deepShadowTexture.id());
 
 
 		//Render
-		smokePartVAO.bind();
+		glBindVertexArray(smokePartVAO.id());
 
 		int count = smokeDims[0] * smokeDims[1] * smokeDims[2];
-		glBindBuffer(GL_ARRAY_BUFFER, smokePartCompBuffer.bufferId());
+		glBindBuffer(GL_ARRAY_BUFFER, smokePartCompBuffer.id());
 		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
 		glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (GLvoid*)(3 * sizeof(float)));
 		glEnableVertexAttribArray(0);
 		glEnableVertexAttribArray(1);
-		
 
 		//glDrawArrays(GL_POINTS, 0, smokePartCount);
 		glDrawArrays(GL_POINTS, 0, count);
 
 		//Cleanup
-		smokePartVAO.release();
+		glBindVertexArray(0);
 		//glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 		glDepthMask(GL_TRUE);
 	}
 
-	timer.recordSample();
-	QVector<GLuint64> intervals = timer.waitForIntervals();
-	//qDebug() << "Deep Shadow Map took" << intervals[0] * 0.000001 << "ms, Particle Creation took" << intervals[1] * 0.000001 << "ms, Shadow Map took" << intervals[2] * 0.000001 << "ms, Scene took" << intervals[3] * 0.000001 << "ms, Smoke took" << intervals[4] * 0.000001 << "ms, Overall Frame Time:" << (intervals[0] + intervals[1] + intervals[2] + intervals[3] + intervals[4]) / 1000000 << "ms";
 }
 
-//Move Camera based on Mouse Movement
-void MyRenderer::mouseEvent(QMouseEvent * e)
+void MyRenderer::mouseEvent(QMouseEvent* e)
 {
 	auto type = e->type();
 	auto pos = e->localPos();
 
+	// begin rotation interaction
 	if (type == QEvent::MouseButtonPress && e->button() == Qt::LeftButton)
 	{
 		this->lastPos = pos;
 		this->rotateInteraction = true;
 		return;
 	}
-	/*if (type == QEvent::MouseButtonPress && e->button() == Qt::RightButton)
-	{
-		this->lastPosRMB = pos;
-		this->rotateLight = true;
-		return;
-	}*/
 
+	// end rotation interaction
 	if (type == QEvent::MouseButtonRelease && e->button() == Qt::LeftButton)
 	{
 		this->rotateInteraction = false;
 		return;
 	}
-	/*if (type == QEvent::MouseButtonRelease && e->button() == Qt::RightButton)
-	{
-		this->rotateLight = false;
-		return;
-	}*/
 
+	// begin light rotation interaction
+	if (type == QEvent::MouseButtonPress && e->button() == Qt::RightButton)
+	{
+		this->lastPos = pos;
+		this->lightRotateInteraction = true;
+		return;
+	}
+
+	// end rotation interaction
+	if (type == QEvent::MouseButtonRelease && e->button() == Qt::RightButton)
+	{
+		this->lightRotateInteraction = false;
+		return;
+	}
+
+	// perform rotation interaction
 	if (this->rotateInteraction)
 	{
 		auto delta = pos - this->lastPos;
-		cameraAzimuth -= 0.01 * delta.x();
-		cameraAzimuth = std::fmod(cameraAzimuth, 6.283185307179586476925286766559);
-		cameraElevation -= 0.01 * delta.y();
-		cameraElevation = std::fmax(std::fmin(cameraElevation, 3.1415926535897932384626433832795), 0);
-
 		this->lastPos = pos;
-	}
-	/*if (this->rotateLight) {
-		auto delta = pos - this->lastPosRMB;
-		this->lightCircleDegrees = (lightCircleDegrees + (int)round(delta.x() / 5.0)) % 360;
 
-		this->lastPosRMB = pos;
-	}*/
+		// scale rotation depending on window diagonal
+		auto scale = constants::two_pi<double> / Eigen::Vector2d{ this->width, this->height }.norm();
+
+		// modify azimuth and elevation by change in mouse position
+		cameraAzimuth -= scale * delta.x();
+		cameraAzimuth = std::fmod(cameraAzimuth, constants::two_pi<double>);
+		cameraElevation -= scale * delta.y();
+
+		// limit elevation so up is never collinear with camera view direction
+		cameraElevation = std::fmax(std::fmin(cameraElevation, constants::pi<double> -0.01), 0.01);
+
+		// tell widget to update itself to account for changed position
+		this->update();
+	}
+
+	if (this->lightRotateInteraction) {
+		auto delta = pos - lastPos;
+		lastPos = pos;
+
+		// scale rotation depending on window diagonal
+		auto scale = constants::two_pi<double> / Eigen::Vector2d{ this->width, this->height }.norm();
+
+		// modify azimuth and elevation by change in mouse position
+		lightAzimuth += scale * delta.x();
+		lightAzimuth = std::fmod(lightAzimuth, constants::two_pi<double>);
+		lightElevation += scale * delta.y();
+
+		lightElevation = std::fmax(std::fmin(lightElevation, constants::pi<double> -0.01), 0.01);
+
+		// tell widget to update itself to account for changed position
+		this->update();
+	}
 }
 
 //Zoom Camera based on Mouse Wheel Movement
-void MyRenderer::wheelEvent(QWheelEvent * e)
-{
+void MyRenderer::wheelEvent(QWheelEvent* e) {
 	auto scrollAmount = e->angleDelta();
-
 	zoomFactor *= 1 - (0.001 * scrollAmount.y());
-}
-
-//Copied from given Project
-void MyRenderer::resize(int w, int h)
-{
-	this->projectionMatrix = calculateInfinitePerspective(
-		0.78539816339744831, // 45 degrees in radians
-		static_cast<double>(w) / h,
-		0.01 // near plane (chosen "at random")
-		);
-	this->inverseProjectionMatrix = this->projectionMatrix.inverse();
+	this->update();
 }

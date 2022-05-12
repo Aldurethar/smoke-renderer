@@ -31,16 +31,6 @@ void main()
 	//The Octant the Camera is in
 	vec3 camDir = cam / abs(cam);
 
-	//Find out which Axes are most dominant to more strongly sort along them
-	vec3 absCam = abs(camPos);
-	int dominantAxes;
-	if (absCam.x >= absCam.y && absCam.x >= absCam.z && absCam.y >= absCam.z){ dominantAxes = 1;}
-	if (absCam.x >= absCam.y && absCam.x >= absCam.z && absCam.z >  absCam.y){ dominantAxes = 2;}
-	if (absCam.y >  absCam.x && absCam.y >= absCam.z && absCam.x >= absCam.z){ dominantAxes = 3;}
-	if (absCam.y >  absCam.x && absCam.y >= absCam.z && absCam.z >  absCam.x){ dominantAxes = 4;}
-	if (absCam.z >  absCam.x && absCam.z >  absCam.y && absCam.x >= absCam.y){ dominantAxes = 5;}
-	if (absCam.z >  absCam.x && absCam.z >  absCam.y && absCam.y >  absCam.x){ dominantAxes = 6;}
-
 	//If the Camera is for Example in the Octant +-+, we want to start with the smoke voxel the furthest away from it, e.g. (-1, 1, -1) * smokeDims
 	//Assumes that smoke voxels have a size of 1/100 space unit
 	//Add half a Voxel for Texture sampling at the voxel center
@@ -54,12 +44,6 @@ void main()
 	float density = texture(smokeData, toSmokePos(currentPoint)).r;
 	
 	uint arrayPos = 0;
-	//if (dominantAxes == 1){arrayPos = gl_GlobalInvocationID.z + gl_GlobalInvocationID.y * uint(smokeDims.z) + gl_GlobalInvocationID.x * uint(smokeDims.y) * uint(smokeDims.z);}
-	//if (dominantAxes == 2){arrayPos = gl_GlobalInvocationID.y + gl_GlobalInvocationID.z * uint(smokeDims.y) + gl_GlobalInvocationID.x * uint(smokeDims.y) * uint(smokeDims.z);}
-	//if (dominantAxes == 3){arrayPos = gl_GlobalInvocationID.z + gl_GlobalInvocationID.x * uint(smokeDims.z) + gl_GlobalInvocationID.y * uint(smokeDims.x) * uint(smokeDims.z);}
-	//if (dominantAxes == 4){arrayPos = gl_GlobalInvocationID.x + gl_GlobalInvocationID.z * uint(smokeDims.x) + gl_GlobalInvocationID.y * uint(smokeDims.x) * uint(smokeDims.z);}
-	//if (dominantAxes == 5){arrayPos = gl_GlobalInvocationID.y + gl_GlobalInvocationID.x * uint(smokeDims.y) + gl_GlobalInvocationID.z * uint(smokeDims.x) * uint(smokeDims.y);}
-	//if (dominantAxes == 6){arrayPos = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * uint(smokeDims.x) + gl_GlobalInvocationID.z * uint(smokeDims.x) * uint(smokeDims.y);}
 	arrayPos = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * uint(smokeDims.x) + gl_GlobalInvocationID.z * uint(smokeDims.x) * uint(smokeDims.y);
 	posDens[arrayPos] = vec4(currentPoint, density);
 }

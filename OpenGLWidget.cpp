@@ -14,7 +14,13 @@ OpenGLWidget::OpenGLWidget(QWidget * parent, Qt::WindowFlags f)
 	, loggingEnabled{false}
 	, loggingSynchronous{false}
 	, renderer{nullptr}
-{}
+{
+	// ensure sRGB texture format so that blending into final FBO is performed correctly
+	this->setTextureFormat(GL_SRGB8_ALPHA8);
+
+	// we always draw the entire viewport
+	this->setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
+}
 
 void OpenGLWidget::setRendererFactory(std::function<OpenGLRenderer * (QObject * parent)> rendererFactory)
 {
@@ -23,12 +29,13 @@ void OpenGLWidget::setRendererFactory(std::function<OpenGLRenderer * (QObject * 
 		return;
 
 	this->makeCurrent();
-	delete this->renderer;
+	this->renderer->deleteLater();
 	this->renderer = nullptr;
 
 	if(this->rendererFactory)
 	{
 		this->renderer = this->rendererFactory(this);
+		QObject::connect(this->renderer, &OpenGLRenderer::update, this, QOverload<>::of(&QWidget::update));
 		if(this->renderer)
 			this->renderer->resize(this->width(), this->height());
 	}
@@ -39,17 +46,17 @@ void OpenGLWidget::setRendererFactory(std::function<OpenGLRenderer * (QObject * 
 
 bool OpenGLWidget::event(QEvent * e)
 {
-	switch (e->type())
+	switch(e->type())
 	{
 	case QEvent::MouseButtonPress:
 	case QEvent::MouseButtonRelease:
 	case QEvent::MouseMove:
-		if (renderer)
+		if(renderer)
 			renderer->mouseEvent(static_cast<QMouseEvent *>(e));
 		return true;
 	case QEvent::Wheel:
 		if (renderer)
-			renderer->wheelEvent(static_cast<QWheelEvent *>(e));
+			renderer->wheelEvent(static_cast<QWheelEvent*>(e));
 		return true;
 	}
 	return QOpenGLWidget::event(e);
@@ -105,11 +112,11 @@ void OpenGLWidget::initializeGL()
 		if(this->loggingEnabled)
 			this->logger->startLogging(this->loggingSynchronous ? QOpenGLDebugLogger::SynchronousLogging : QOpenGLDebugLogger::AsynchronousLogging);
 	}
-	
+
 	// using a thread_local static variable as gladLoadGLLoader does not allow passing of user data
 	thread_local QOpenGLContext * gl_context = nullptr;
-	gl_context = context();
-	gladLoadGLLoader([] (char const * name) -> void * { return gl_context->getProcAddress(name); });
+	gl_context = this->context();
+	gladLoadGLLoader([] (char const * name) { return reinterpret_cast<void *>(gl_context->getProcAddress(name)); });
 
 	assert(this->renderer == nullptr);
 
@@ -117,15 +124,18 @@ void OpenGLWidget::initializeGL()
 		return;
 
 	this->renderer = this->rendererFactory(this);
+	QObject::connect(this->renderer, &OpenGLRenderer::update, this, QOverload<>::of(&QWidget::update));
 	if(this->renderer)
 		this->renderer->resize(this->width(), this->height());
 }
 
 void OpenGLWidget::paintGL()
 {
+	makeCurrent();
+	// ensure that sRGB framebuffer is enabled
+	glEnable(GL_FRAMEBUFFER_SRGB);
 	if(this->renderer)
 		this->renderer->render();
-	update();
 }
 
 void OpenGLWidget::resizeGL(int w, int h)

@@ -94,7 +94,7 @@ void main()
 	//calculate shadow bias based on light angle
 	float bias = max(0.05 * (1.0 - dot(normal, lightDir)), 0.005);
 	//Calculate Shadow
-	float shadow = ShadowCalculation(FragPosLightSpace, bias);
+	float shadow = ShadowCalculation(FragPosLightSpace, bias);	
 	vec3 lighting = (ambient + (1 - shadow) * (diffuse + specular)) * color;
 
 	FragColor = vec4(lighting, 1.0);

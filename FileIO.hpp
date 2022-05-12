@@ -1,10 +1,11 @@
+#pragma once
 #include <vector>
 #include <fstream>
 
 template<typename F, size_t AXES>
 
 
-bool writeField(const std::string& filename, const F* field, const size_t (&dims)[AXES])
+static bool writeField(const std::string& filename, const F* field, const size_t (&dims)[AXES])
 {
 	std::ofstream f(filename.c_str(), std::ofstream::out | std::ofstream::binary);
 	if(!f) return false;
@@ -25,7 +26,7 @@ bool writeField(const std::string& filename, const F* field, const size_t (&dims
 	return true;
 }
 
-bool readField(
+static bool readField(
 	const std::string& filename,
 	std::vector<float>& field,
 	std::vector<size_t>& dims

@@ -99,5 +99,4 @@ void main()
 	vec3 lighting = (ambient + (1 - shadow) * (diffuse + specular)) * color;
 
 	FragColor = vec4(lighting, 1.0);
-	//FragColor = vec4(vec3(FragPosDSMLightSpace.xyz) , 1.0);
 }

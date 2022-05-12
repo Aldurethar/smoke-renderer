@@ -12,18 +12,41 @@ GLMainWindow::GLMainWindow(QWidget * parent, Qt::WindowFlags f)
 	: QMainWindow{parent, f}
 	, ui{new Ui::GLMainWindow}
 {
+	// set up ui defined in GLMainWindow.ui
 	this->ui->setupUi(this);
+
+	// copy title from application
 	this->setWindowTitle(QApplication::applicationDisplayName());
 
 	// forward signals
 	this->connect(this->ui->openGLWidget, &OpenGLWidget::loggingEnabledChanged, this, &GLMainWindow::openGLLoggingEnabledChanged);
 	this->connect(this->ui->openGLWidget, &OpenGLWidget::loggingSynchronousChanged, this, &GLMainWindow::openGLLoggingSynchronousChanged);
 
+	// set system-specific shortcuts
 	this->ui->actionExit->setShortcuts(QKeySequence::Quit);
 	this->ui->actionFullScreen->setShortcuts(QKeySequence::FullScreen);
 
+	// create an exclusive action group
+	auto fullScreenGroup = new QActionGroup{this};
+	fullScreenGroup->addAction(this->ui->actionFullScreen);
+	fullScreenGroup->addAction(this->ui->actionFullScreenOpenGL);
+
+	// triggering the selected action in this action group should uncheck it
+	connect(fullScreenGroup, &QActionGroup::triggered, [lastAction = static_cast<QAction *>(nullptr)] (QAction* action) mutable {
+		if(action == lastAction)
+		{
+			action->setChecked(false);
+			lastAction = nullptr;
+		}
+		else
+		{
+			lastAction = action;
+		}
+	});
+
 	// we hide the menuBar in full screen OpenGL mode, but this disables shortcuts as well, so we clone them
 	this->fillActionShortcuts(this->menuBar());
+
 	// add an additional shortcut (Escape) to leave full screen OpenGL mode
 	{
 		auto action = this->ui->actionFullScreenOpenGL;
@@ -62,8 +85,7 @@ void GLMainWindow::on_actionFullScreen_toggled(bool checked)
 
 void GLMainWindow::on_actionFullScreenOpenGL_toggled(bool checked)
 {
-	this->ui->actionFullScreen->setEnabled(!checked);
-
+	// hide/show widgets such as the menu bar to create a true full screen view
 	if(checked)
 	{
 		this->savedVisibilities.clear();
@@ -94,7 +116,7 @@ void GLMainWindow::on_actionFullScreenOpenGL_toggled(bool checked)
 		shortcut->setEnabled(checked);
 
 #ifdef _WIN32
-	// see on_actionFullScreen_toggled
+	// see on_actionFullScreen_toggled, we don't use any menus in "exclusive" fullscreen
 	QWindowsWindowFunctions::setHasBorderInFullScreen(this->window()->windowHandle(), !checked);
 	this->showNormal();
 #endif
@@ -107,11 +129,12 @@ void GLMainWindow::on_actionFullScreenOpenGL_toggled(bool checked)
 
 void GLMainWindow::on_actionAbout_triggered()
 {
-	QMessageBox::about(this, tr("About %1").arg(QApplication::applicationDisplayName()), tr("This application is based on the simulation framework for the TU Darmstadt lecture on physically based animation."));
+	QMessageBox::about(this, tr("About %1").arg(QApplication::applicationDisplayName()), tr("This application is based on the simulation framework for the TU Darmstadt lecture on physically based simulation and animation."));
 }
 
 void GLMainWindow::fillActionShortcuts(QWidget * base)
 {
+	// copy action shortcuts recursively
 	for(auto action : base->actions())
 	{
 		if(auto menu = action->menu())
@@ -128,8 +151,10 @@ void GLMainWindow::fillActionShortcuts(QWidget * base)
 			this->actionShortcuts.emplace_back(new QShortcut{shortcut, this});
 			auto actionShortcut = this->actionShortcuts.back();
 			actionShortcut->setAutoRepeat(false);
+
 			// disable shortcuts by default to avoid ambiguity when menuBar is visible
 			actionShortcut->setEnabled(false);
+
 			this->connect(actionShortcut, &QShortcut::activated, action, [action] { if(action->isEnabled() && action->isVisible()) action->trigger(); });
 		}
 	}

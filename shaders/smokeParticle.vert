@@ -15,7 +15,9 @@ void main()
 {
 	vec4 FragPosClipSpace = modelViewProjection * vec4(aPos, 1.0);
 	float z = FragPosClipSpace.z / FragPosClipSpace.w;
-	gl_PointSize = 30.0 / FragPosClipSpace.z;
+	//gl_PointSize = 30.0 / FragPosClipSpace.z;	
+	gl_PointSize = -1000.0 * z;
+	//gl_PointSize = 3.0;
 	//Most particles are far from being dense enough to see, so we cull them
 	if (aDensity <= 0.001){
 		gl_PointSize = 0.0;

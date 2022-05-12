@@ -1,22 +1,12 @@
 #pragma once
 
 #include "OpenGLRenderer.hpp"
+#include "constants.hpp"
 
-#include <glad/glad.h>
+#include <OpenGLObjects.h>
 
-#include <QOpenGLBuffer>
-#include <QOpenGLShaderProgram>
-#include <QOpenGLTexture>
-#include <QOpenGLVertexArrayObject>
-#include <QOpenGLFramebufferObject>
-#include <QWheelEvent>
-#include <QMouseEvent>
-#include <QOpenGLTimeMonitor>
-
-#include <assimp/Importer.hpp>
-#include <assimp/DefaultLogger.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
+#include <QElapsedTimer>
+#include <QPoint>
 
 #include <Eigen/Core>
 
@@ -25,24 +15,32 @@ class MyRenderer : public OpenGLRenderer
 	Q_OBJECT
 
 public:
-	MyRenderer(QObject * parent);
-	
+	MyRenderer(QObject* parent);
+
 	void resize(int w, int h) override;
 	void render() override;
 
-	void mouseEvent(QMouseEvent * e) override;
-	void wheelEvent(QWheelEvent * e) override;
+	void mouseEvent(QMouseEvent* e) override;
+	void wheelEvent(QWheelEvent* e) override;
 
 private:
-	//Camera and camera Movement
-	double cameraAzimuth, cameraElevation, zoomFactor;
-	bool rotateInteraction;
+	//Camera and Controls
+	double
+		cameraAzimuth = constants::pi<double>,
+		cameraElevation = constants::half_pi<double>;
+	double zoomFactor = 4.0;
+	bool rotateInteraction = false;
 	float cameraPos[3];
 	GLint viewportSize[4];
+	double lightAzimuth = constants::half_pi<double>;
+	double lightElevation = constants::half_pi<double>;
+	bool lightRotateInteraction = false;
+
+	int width = 0, height = 0;
+
 	QPointF lastPos;
-	bool rotateLight;
-	QPointF lastPosRMB;
-	int lightCircleDegrees = 0;
+	QElapsedTimer timer;
+	quint64 lastTimeNS = 0;
 
 	//Smoke Data from File
 	std::vector<float> smokeData;
@@ -60,16 +58,14 @@ private:
 
 	//Scene to be rendered
 	std::vector<uint> sceneIndexCounts;
-	std::vector<QOpenGLBuffer> sceneVertexBuffers;
-	std::vector<QOpenGLBuffer> sceneIndexBuffers;
-	std::vector<QOpenGLVertexArrayObject*> sceneVAOs;
-	std::vector<QOpenGLShaderProgram*> scenePrograms;
+	std::vector<gl::Buffer*> sceneVertexBuffers;
+	std::vector<gl::Buffer*> sceneIndexBuffers;
+	std::vector<gl::VertexArray*> sceneVAOs;
+	std::vector<gl::Program*> scenePrograms;
 	std::vector<bool> sceneHasTexture;
 	int numObjectsInScene;
 
-	uint testIndexCount, groundIndexCount;
 
-	QOpenGLTimeMonitor timer;
 
 	Eigen::Matrix4d
 		projectionMatrix, inverseProjectionMatrix,
@@ -78,31 +74,42 @@ private:
 		inverseLightViewMatrix,
 		dsmProjectionMatrix;
 
-	QOpenGLBuffer
+	gl::Buffer
+		icosphereVertexBuffer, icosphereIndexBuffer,
 		debugVertexBuffer, debugIndexBuffer,
 		smokePartVertexBuffer,
 		smokePartCompBuffer,
 		smokeSliceVertexBuffer, smokeSliceIndexBuffer;
 
-	QOpenGLVertexArrayObject
+	gl::VertexArray
+		icosphereVAO,
+		skyboxVAO,
 		debugVAO,
 		smokePartVAO,
 		smokeSliceVAO;
 
-	QOpenGLShaderProgram
+	gl::Program
+		icosphereProgram,
+		skyboxProgram,
 		depthProgram, debugQuadProgram,
 		smokePartProgram,
 		smokeSliceProgram,
 		deepShadowProgram,
 		particleCreationProgram;
-	
-	QOpenGLTexture
+
+	gl::Texture
+		earthTexture,
+		moonTexture,
+		starsCubeMap,
 		testTexture,
 		smokeDataTexture,
+		depthTexture,
 		deepShadowTexture;
 
-	QOpenGLFramebufferObject
+	gl::Framebuffer
 		depthMapFBO;
+
+	GLsizei numIcosphereIndices = 0;
 
 	void openScene(const std::string& fileName);
 	void computeSmokePlanes(Eigen::Matrix4d view);
